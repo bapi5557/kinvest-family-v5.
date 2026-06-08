@@ -1,34 +1,44 @@
 
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import { collection, query, orderBy } from "firebase/firestore";
-import { useFirestore, useCollection, useUser } from "@/firebase";
-import { Expense } from "@/app/lib/types";
-import { MobileNav } from "@/components/layout/MobileNav";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
-import { Sparkles, FileText, Download, Share2 } from "lucide-react";
-import { smartSpendingInsights, SmartSpendingInsightsOutput } from "@/ai/flows/smart-spending-insights";
-import { monthlyReportSummary, MonthlyReportSummaryOutput } from "@/ai/flows/monthly-report-summary-flow";
-import { ResponsiveContainer, Tooltip, Cell, Pie, PieChart as RePieChart, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { signOut, updatePassword } from "firebase/auth";
+import { useAuth, useUser } from "@/firebase";
+import { MobileNav } from "@/components/layout/MobileNav";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { 
+  User, 
+  Lock, 
+  FileText, 
+  Share2, 
+  Database, 
+  Moon, 
+  LogOut, 
+  ChevronRight,
+  ShieldCheck
+} from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { format } from "date-fns";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { useState } from "react";
 
-export default function ReportsPage() {
-  const firestore = useFirestore();
+export default function SettingsPage() {
   const { user, loading: authLoading } = useUser();
+  const auth = useAuth();
   const router = useRouter();
   const { toast } = useToast();
-
-  const expensesQuery = useMemo(() => query(collection(firestore, "expenses"), orderBy("date", "desc")), [firestore]);
-  const { data: expenses, loading: expensesLoading } = useCollection<Expense>(expensesQuery as any);
-
-  const [spendingInsights, setSpendingInsights] = useState<SmartSpendingInsightsOutput | null>(null);
-  const [reportSummary, setReportSummary] = useState<MonthlyReportSummaryOutput | null>(null);
-  const [loadingAi, setLoadingAi] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [isChangingPass, setIsChangingPass] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -36,231 +46,173 @@ export default function ReportsPage() {
     }
   }, [user, authLoading, router]);
 
-  const categoryTotals = useMemo(() => {
-    return expenses.reduce((acc, curr) => {
-      acc[curr.category] = (acc[curr.category] || 0) + curr.amount;
-      return acc;
-    }, {} as Record<string, number>);
-  }, [expenses]);
+  const handleLogout = async () => {
+    await signOut(auth);
+    router.push("/login");
+  };
 
-  const chartData = useMemo(() => {
-    return Object.entries(categoryTotals).map(([name, value]) => ({ name, value }));
-  }, [categoryTotals]);
-
-  const memberTotals = useMemo(() => {
-    return expenses.reduce((acc, curr) => {
-      acc[curr.memberName] = (acc[curr.memberName] || 0) + curr.amount;
-      return acc;
-    }, {} as Record<string, number>);
-  }, [expenses]);
-
-  const memberChartData = useMemo(() => {
-    return Object.entries(memberTotals).map(([name, value]) => ({ name, value }));
-  }, [memberTotals]);
-
-  const COLORS = ['#85DAE8', '#395B96', '#546E7A', '#78909C', '#B0BEC5', '#CFD8DC', '#ECEFF1'];
-
-  const handleGenerateAiReports = async () => {
-    if (expenses.length === 0) return;
-    setLoadingAi(true);
+  const handleChangePassword = async () => {
+    if (!user || !newPassword) return;
     try {
-      const insightsPromise = smartSpendingInsights({
-        monthlySpending: categoryTotals,
-        spendingHistorySummary: `Total expenses recorded: ${expenses.length}. Total amount: $${expenses.reduce((a, b) => a + b.amount, 0)}`,
-        familyMembers: Array.from(new Set(expenses.map(e => e.memberName)))
-      });
-
-      const summaryPromise = monthlyReportSummary({
-        reportType: 'monthly',
-        periodDescription: format(new Date(), 'MMMM yyyy'),
-        currentPeriodData: chartData.map(d => ({ category: d.name, amount: d.value }))
-      });
-
-      const [insights, summary] = await Promise.all([insightsPromise, summaryPromise]);
-      setSpendingInsights(insights);
-      setReportSummary(summary);
-      
+      await updatePassword(user, newPassword);
       toast({
-        title: "AI Analysis Complete",
-        description: "Your family spending insights are ready.",
+        title: "PIN Updated",
+        description: "Your family gateway PIN has been successfully changed.",
       });
-    } catch (e) {
-      console.error(e);
+      setNewPassword("");
+      setIsChangingPass(false);
+    } catch (error: any) {
       toast({
-        title: "AI Failure",
-        description: "Could not generate insights at this time.",
-        variant: "destructive"
+        title: "Update Failed",
+        description: error.message,
+        variant: "destructive",
       });
-    } finally {
-      setLoadingAi(false);
     }
   };
 
   const handleExport = () => {
     toast({
-      title: "PDF Export",
-      description: "Generating financial report document...",
+      title: "Generating PDF Report",
+      description: "Your document is being prepared for export.",
     });
   };
 
-  const handleShare = () => {
+  const handleBackup = () => {
     toast({
-      title: "Report Shared",
-      description: "Link copied to family clipboard.",
+      title: "Backup Initialized",
+      description: "Firestore synchronization in progress.",
     });
   };
 
-  if (authLoading) return null;
+  if (authLoading || !user) return null;
 
   return (
     <div className="flex flex-col min-h-screen pb-20 bg-background">
-      <header className="p-6 pt-10 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-headline font-bold text-foreground">Analytics</h1>
-          <p className="text-muted-foreground">Family spending intelligence</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="ghost" size="icon" onClick={handleExport} className="text-accent">
-            <Download size={20} />
-          </Button>
-          <Button variant="ghost" size="icon" onClick={handleShare} className="text-accent">
-            <Share2 size={20} />
-          </Button>
-        </div>
+      <header className="p-6 pt-10">
+        <h1 className="text-3xl font-headline font-bold text-foreground">Preferences</h1>
+        <p className="text-muted-foreground">Kincash System Controls</p>
       </header>
 
       <main className="px-6 space-y-6 fade-in">
-        {/* AI Insight Section */}
-        <Card className="glass-card border-none">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="text-accent w-5 h-5 animate-pulse" />
-                <CardTitle className="font-headline text-accent text-lg">AI Financial Assistant</CardTitle>
+        {/* Account Section */}
+        <section className="space-y-3">
+          <h2 className="text-xs font-bold uppercase text-accent tracking-widest ml-1">Family Security</h2>
+          <Card className="bg-card/40 border-white/5 divide-y divide-white/5 overflow-hidden">
+            <div className="p-4 flex items-center justify-between hover:bg-card/60 transition-colors cursor-pointer">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center text-accent">
+                  <User size={18} />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold">Family Profile</p>
+                  <p className="text-[10px] text-muted-foreground uppercase">{user.email}</p>
+                </div>
               </div>
+              <ChevronRight size={16} className="text-muted-foreground" />
             </div>
-            <CardDescription>Generative spending analysis & savings tips</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!spendingInsights ? (
-              <Button 
-                onClick={handleGenerateAiReports} 
-                disabled={loadingAi || expenses.length === 0}
-                className="w-full btn-cyan font-bold py-6 rounded-xl"
-              >
-                {loadingAi ? "ANALYZING LEDGER..." : "GENERATE AI INSIGHTS"}
-              </Button>
-            ) : (
-              <div className="space-y-4 animate-in fade-in duration-500">
-                {reportSummary && (
-                  <div className="p-4 rounded-xl bg-accent/10 border border-accent/20">
-                    <h4 className="text-xs font-bold uppercase text-accent mb-2 flex items-center gap-2">
-                      <FileText size={14} /> Monthly Summary
-                    </h4>
-                    <p className="text-sm leading-relaxed text-foreground/90">{reportSummary.summary}</p>
-                  </div>
-                )}
-                <div className="p-4 rounded-xl bg-primary/10 border border-primary/20">
-                  <h4 className="text-xs font-bold uppercase text-accent mb-2">Detailed Analysis</h4>
-                  <p className="text-sm leading-relaxed text-foreground/90">{spendingInsights.spendingAnalysis}</p>
-                </div>
-                <div className="space-y-2">
-                  <h4 className="text-xs font-bold uppercase text-accent">Personalized Savings Tips</h4>
-                  {spendingInsights.savingsTips.map((tip, i) => (
-                    <div key={i} className="flex gap-3 items-start text-xs bg-card/50 p-3 rounded-lg border border-white/5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-accent mt-1.5 shrink-0" />
-                      <span>{tip}</span>
-                    </div>
-                  ))}
-                </div>
-                <Button variant="outline" size="sm" onClick={() => { setSpendingInsights(null); setReportSummary(null); }} className="w-full text-muted-foreground">
-                  Reset Analysis
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
 
-        {/* Charts Section */}
-        <Tabs defaultValue="categories" className="w-full">
-          <TabsList className="w-full grid grid-cols-2 bg-card/60 border border-white/5 p-1 rounded-xl">
-            <TabsTrigger value="categories" className="rounded-lg data-[state=active]:bg-primary/20">Categories</TabsTrigger>
-            <TabsTrigger value="members" className="rounded-lg data-[state=active]:bg-primary/20">Members</TabsTrigger>
-          </TabsList>
-          
-          <TabsContent value="categories" className="mt-4 space-y-4">
-            <Card className="bg-card/40 border-none rounded-2xl overflow-hidden">
-              <CardHeader className="pb-0">
-                <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Expense Distribution</CardTitle>
-              </CardHeader>
-              <CardContent className="h-[300px]">
-                {chartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <RePieChart>
-                      <Pie
-                        data={chartData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={80}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {chartData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip 
-                        contentStyle={{ backgroundColor: '#1E232E', border: 'none', borderRadius: '12px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)' }}
-                        itemStyle={{ color: '#85DAE8' }}
-                      />
-                    </RePieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-muted-foreground italic text-sm">No transaction data available</div>
-                )}
-              </CardContent>
-            </Card>
-
-            <div className="space-y-3">
-              {chartData.sort((a, b) => b.value - a.value).map((item, idx) => (
-                <div key={idx} className="bg-card/30 p-4 rounded-xl border border-white/5 flex items-center justify-between">
+            <Dialog open={isChangingPass} onOpenChange={setIsChangingPass}>
+              <DialogTrigger asChild>
+                <div className="p-4 flex items-center justify-between hover:bg-card/60 transition-colors cursor-pointer">
                   <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                    <span className="text-sm font-medium">{item.name}</span>
+                    <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center text-accent">
+                      <Lock size={18} />
+                    </div>
+                    <p className="text-sm font-semibold">Change Gateway PIN</p>
                   </div>
-                  <span className="font-headline font-bold text-accent">${item.value.toLocaleString()}</span>
+                  <ChevronRight size={16} className="text-muted-foreground" />
                 </div>
-              ))}
+              </DialogTrigger>
+              <DialogContent className="glass-card border-none">
+                <DialogHeader>
+                  <DialogTitle className="font-headline">Update Security PIN</DialogTitle>
+                </DialogHeader>
+                <div className="py-4">
+                  <Input
+                    type="password"
+                    placeholder="New PIN / Password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="bg-card/50"
+                  />
+                </div>
+                <DialogFooter>
+                  <Button onClick={handleChangePassword} className="btn-cyan w-full">Update PIN</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </Card>
+        </section>
+
+        {/* Studio Section */}
+        <section className="space-y-3">
+          <h2 className="text-xs font-bold uppercase text-accent tracking-widest ml-1">Document Studio</h2>
+          <Card className="bg-card/40 border-white/5 divide-y divide-white/5 overflow-hidden">
+            <div 
+              className="p-4 flex items-center justify-between hover:bg-card/60 transition-colors cursor-pointer"
+              onClick={handleExport}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center text-accent">
+                  <FileText size={18} />
+                </div>
+                <p className="text-sm font-semibold">Export PDF Report</p>
+              </div>
+              <ChevronRight size={16} className="text-muted-foreground" />
             </div>
-          </TabsContent>
-          
-          <TabsContent value="members" className="mt-4">
-             <Card className="bg-card/40 border-none rounded-2xl">
-              <CardHeader>
-                <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Spending per Member</CardTitle>
-              </CardHeader>
-              <CardContent className="h-[300px]">
-                {memberChartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={memberChartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#2D3748" vertical={false} />
-                      <XAxis dataKey="name" stroke="#A0AEC0" fontSize={10} tickLine={false} axisLine={false} />
-                      <YAxis stroke="#A0AEC0" fontSize={10} tickLine={false} axisLine={false} />
-                      <Tooltip 
-                         cursor={{fill: 'rgba(133, 218, 232, 0.1)'}}
-                         contentStyle={{ backgroundColor: '#1E232E', border: 'none', borderRadius: '12px' }}
-                      />
-                      <Bar dataKey="value" fill="#85DAE8" radius={[6, 6, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-muted-foreground italic text-sm">No member data available</div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+            <div className="p-4 flex items-center justify-between hover:bg-card/60 transition-colors cursor-pointer">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center text-accent">
+                  <Share2 size={18} />
+                </div>
+                <p className="text-sm font-semibold">Share with Family</p>
+              </div>
+              <ChevronRight size={16} className="text-muted-foreground" />
+            </div>
+          </Card>
+        </section>
+
+        {/* System Section */}
+        <section className="space-y-3">
+          <h2 className="text-xs font-bold uppercase text-accent tracking-widest ml-1">System</h2>
+          <Card className="bg-card/40 border-white/5 divide-y divide-white/5 overflow-hidden">
+            <div 
+              className="p-4 flex items-center justify-between hover:bg-card/60 transition-colors cursor-pointer"
+              onClick={handleBackup}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center text-accent">
+                  <Database size={18} />
+                </div>
+                <p className="text-sm font-semibold">Cloud Sync & Backup</p>
+              </div>
+              <div className="text-[10px] bg-emerald-500/10 text-emerald-500 px-2 py-0.5 rounded-full border border-emerald-500/20">LIVE</div>
+            </div>
+            <div className="p-4 flex items-center justify-between hover:bg-card/60 transition-colors">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center text-accent">
+                  <Moon size={18} />
+                </div>
+                <p className="text-sm font-semibold">System Dark Mode</p>
+              </div>
+              <Switch checked={true} />
+            </div>
+          </Card>
+        </section>
+
+        <Button 
+          variant="ghost" 
+          onClick={handleLogout}
+          className="w-full text-destructive hover:text-destructive hover:bg-destructive/10 h-14 border border-destructive/10"
+        >
+          <LogOut size={18} className="mr-2" />
+          TERMINATE SESSION
+        </Button>
+
+        <div className="flex flex-col items-center justify-center gap-1 py-4 opacity-30">
+          <ShieldCheck size={20} />
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em]">Kincash Enterprise v1.0.4</p>
+        </div>
       </main>
 
       <MobileNav />
