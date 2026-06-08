@@ -1,159 +1,176 @@
+'use client';
 
-"use client";
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { useAuth } from '@/firebase';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
+import { Wallet, Info, CheckCircle2 } from 'lucide-react';
+import Link from 'next/link';
+import { useToast } from '@/hooks/use-toast';
+import { firebaseConfig } from '@/firebase/config';
 
-import { useMemo, useEffect } from "react";
-import { collection, query, orderBy } from "firebase/firestore";
-import { useFirestore, useUser, useCollection } from "@/firebase";
-import { Expense, FamilyMember } from "@/app/lib/types";
-import { MobileNav } from "@/components/layout/MobileNav";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Wallet, TrendingUp, Users as UsersIcon, PlusCircle, ArrowUpRight, Activity } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import Link from "next/link";
-import { format } from "date-fns";
-import { useRouter } from "next/navigation";
-
-export default function Dashboard() {
-  const { user, loading: authLoading } = useUser();
-  const firestore = useFirestore();
+export default function RegisterPage() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const auth = useAuth();
   const router = useRouter();
+  const { toast } = useToast();
 
-  const membersQuery = useMemo(() => query(collection(firestore, "members"), orderBy("name")), [firestore]);
-  const expensesQuery = useMemo(() => query(collection(firestore, "expenses"), orderBy("date", "desc")), [firestore]);
+  const isConfigDummy = firebaseConfig.apiKey === 'dummy-api-key';
 
-  const { data: members, loading: membersLoading } = useCollection<FamilyMember>(membersQuery);
-  const { data: expenses, loading: expensesLoading } = useCollection<Expense>(expensesQuery);
-
-  useEffect(() => {
-    if (!authLoading && !user) {
-      router.push("/login");
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (isConfigDummy) {
+      toast({
+        title: "Configuration Missing",
+        description: "Please connect a real Firebase project in the Studio UI first.",
+        variant: "destructive",
+      });
+      return;
     }
-  }, [user, authLoading, router]);
 
-  if (authLoading || !user) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-background gap-4">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent"></div>
-        <p className="text-muted-foreground font-headline text-sm animate-pulse uppercase tracking-widest">Securing Gateway...</p>
-      </div>
-    );
-  }
+    if (password.length < 6) {
+      toast({
+        title: "Weak Password",
+        description: "Firebase requires at least 6 characters.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-  const totalExpense = expenses.reduce((acc, curr) => acc + curr.amount, 0);
-  const currentMonthExpenses = expenses.filter(e => {
-    const date = new Date(e.date);
-    const now = new Date();
-    return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
-  });
-  const monthTotal = currentMonthExpenses.reduce((acc, curr) => acc + curr.amount, 0);
-  
-  const budget = 5000;
-  const budgetPercentage = Math.min((monthTotal / budget) * 100, 100);
+    if (password !== confirmPassword) {
+      toast({
+        title: "Password Mismatch",
+        description: "The confirmation password does not match.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      if (userCredential.user) {
+        toast({
+          title: "Registry Created",
+          description: "Welcome to Kincash!",
+        });
+        router.push('/');
+      }
+    } catch (error: any) {
+      let message = "An error occurred during registration.";
+      if (error.code === 'auth/operation-not-allowed') {
+        message = "Email/Password sign-in is disabled in your Firebase Console.";
+      } else if (error.code === 'auth/email-already-in-use') {
+        message = "This family email is already registered.";
+      }
+      toast({
+        title: "Registration Failed",
+        description: message,
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <div className="flex flex-col min-h-screen pb-20 bg-background">
-      <header className="p-6 pt-10 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-headline font-bold text-foreground">Kincash</h1>
-          <p className="text-muted-foreground text-sm uppercase tracking-widest font-semibold mt-1">Family Financial Hub</p>
+    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-background">
+      <div className="mb-8 flex flex-col items-center text-center gap-2">
+        <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center text-accent shadow-xl shadow-primary/20">
+          <Wallet size={32} />
         </div>
-        <div className="w-10 h-10 rounded-full bg-primary/20 border border-accent/20 flex items-center justify-center text-accent">
-          <Activity size={20} />
-        </div>
-      </header>
+        <h1 className="text-3xl font-headline font-bold text-foreground mt-4">Kincash</h1>
+        <p className="text-muted-foreground uppercase tracking-widest text-xs font-semibold">Join the Financial Hub</p>
+      </div>
 
-      <main className="px-6 space-y-6 fade-in">
-        {/* Main spending card */}
-        <Card className="glass-card border-none overflow-hidden relative p-1">
-          <div className="absolute top-0 right-0 p-6 opacity-5">
-            <Wallet size={100} />
-          </div>
-          <CardContent className="p-6">
-            <div className="flex flex-col gap-1">
-              <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Monthly Shared Spending</span>
-              <div className="text-5xl font-headline font-bold text-accent">
-                ${monthTotal.toLocaleString()}
-              </div>
-            </div>
-            
-            <div className="mt-8 space-y-2">
-              <div className="flex items-center justify-between text-xs font-semibold uppercase">
-                <span className="text-muted-foreground">Budget Utilization</span>
-                <span className={budgetPercentage > 90 ? "text-destructive" : "text-accent"}>
-                  {budgetPercentage.toFixed(0)}%
-                </span>
-              </div>
-              <Progress value={budgetPercentage} className="h-2 bg-white/10" />
-              <div className="flex items-center gap-2 mt-2">
-                <TrendingUp className="text-emerald-400 w-3 h-3" />
-                <span className="text-[10px] text-muted-foreground uppercase tracking-tight">Standard family limit: $5,000.00</span>
+      {isConfigDummy && (
+        <Card className="max-w-md w-full mb-6 border-amber-500/20 bg-amber-500/5">
+          <CardContent className="pt-6">
+            <div className="flex gap-3 text-amber-500">
+              <Info className="w-5 h-5 shrink-0 mt-0.5" />
+              <div className="space-y-4">
+                <div>
+                  <p className="font-bold uppercase text-xs mb-1">Step 1: Connect Project</p>
+                  <p className="text-xs">Click the "Connect" button in the Studio interface.</p>
+                </div>
+                <div>
+                  <p className="font-bold uppercase text-xs mb-1">Step 2: Enable Services</p>
+                  <ul className="text-xs list-disc list-inside space-y-1">
+                    <li>Enable **Email/Password** in Firebase Auth.</li>
+                    <li>Create a **Firestore** database in test mode.</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </CardContent>
         </Card>
+      )}
 
-        {/* Stats Summary */}
-        <div className="grid grid-cols-2 gap-4">
-          <Card className="bg-primary/20 border border-primary/30 rounded-2xl">
-            <CardContent className="p-5 flex flex-col gap-1">
-              <UsersIcon className="text-accent w-5 h-5 mb-2" />
-              <span className="text-[10px] font-bold uppercase text-muted-foreground">Active Roster</span>
-              <span className="text-2xl font-headline font-bold">{members.length}</span>
-            </CardContent>
-          </Card>
-          <Card className="bg-secondary/40 border border-white/5 rounded-2xl">
-            <CardContent className="p-5 flex flex-col gap-1">
-              <ArrowUpRight className="text-destructive w-5 h-5 mb-2" />
-              <span className="text-[10px] font-bold uppercase text-muted-foreground">Lifetime Exp</span>
-              <span className="text-2xl font-headline font-bold">${(totalExpense / 1000).toFixed(1)}k</span>
-            </CardContent>
-          </Card>
+      {!isConfigDummy && (
+        <div className="max-w-md w-full mb-6 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center gap-3 text-emerald-500">
+          <CheckCircle2 className="w-4 h-4" />
+          <p className="text-[10px] font-bold uppercase tracking-widest">Firebase Gateway Active</p>
         </div>
+      )}
 
-        {/* Recent Activity */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-headline font-semibold">Ledger Stream</h2>
-            <Link href="/reports">
-              <Button variant="link" className="text-accent text-xs p-0 font-bold uppercase tracking-widest">Analytics</Button>
-            </Link>
-          </div>
-          
-          <div className="space-y-3">
-            {expenses.slice(0, 5).map((expense) => (
-              <div key={expense.id} className="flex items-center justify-between p-4 rounded-2xl bg-card/40 border border-white/5 horizontal-slide-enter">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-muted/30 flex items-center justify-center text-xs font-bold text-accent uppercase">
-                    {expense.category.charAt(0)}
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="font-semibold text-sm">{expense.category}</span>
-                    <span className="text-[10px] text-muted-foreground uppercase font-medium">{expense.memberName} • {format(expense.date, 'MMM d')}</span>
-                  </div>
-                </div>
-                <div className="font-headline font-bold text-foreground">
-                  -${expense.amount.toFixed(2)}
-                </div>
-              </div>
-            ))}
-            {expenses.length === 0 && !expensesLoading && (
-              <div className="text-center py-16 bg-card/20 rounded-2xl border border-dashed border-white/10 text-muted-foreground italic text-sm">
-                The ledger is currently empty.
-              </div>
-            )}
-          </div>
-        </div>
-
-        <Link href="/members" className="block pt-2">
-          <Button className="w-full btn-cyan py-7 font-headline font-bold gap-3 rounded-2xl shadow-xl shadow-accent/10">
-            <PlusCircle className="w-6 h-6" />
-            RECORD FAMILY EXPENSE
-          </Button>
-        </Link>
-      </main>
-
-      <MobileNav />
+      <Card className="w-full max-w-md glass-card border-none">
+        <CardHeader>
+          <CardTitle className="font-headline">Create Registry</CardTitle>
+          <CardDescription>Setup your shared family account</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleRegister} className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase text-muted-foreground">Shared Family Email</label>
+              <Input
+                type="email"
+                placeholder="family@kincash.app"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="bg-card/50 h-12"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase text-muted-foreground">PIN / Password (min 6 chars)</label>
+              <Input
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="bg-card/50 h-12"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase text-muted-foreground">Confirm PIN</label>
+              <Input
+                type="password"
+                placeholder="••••••••"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                className="bg-card/50 h-12"
+              />
+            </div>
+            <Button type="submit" className="w-full btn-cyan py-6 font-bold" disabled={loading || isConfigDummy}>
+              {loading ? "INITIALIZING..." : "CREATE FAMILY REGISTRY"}
+            </Button>
+          </form>
+        </CardContent>
+        <CardFooter className="flex flex-col gap-2">
+          <p className="text-sm text-muted-foreground">
+            Already have an account? <Link href="/login" className="text-accent hover:underline">Sign in</Link>
+          </p>
+        </CardFooter>
+      </Card>
     </div>
   );
 }
