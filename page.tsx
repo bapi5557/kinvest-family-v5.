@@ -1,176 +1,269 @@
-'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { useAuth } from '@/firebase';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
-import { Wallet, Info, CheckCircle2 } from 'lucide-react';
-import Link from 'next/link';
-import { useToast } from '@/hooks/use-toast';
-import { firebaseConfig } from '@/firebase/config';
+"use client";
 
-export default function RegisterPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const auth = useAuth();
+import { useEffect, useState, useMemo } from "react";
+import { collection, query, orderBy } from "firebase/firestore";
+import { useFirestore, useCollection, useUser } from "@/firebase";
+import { Expense } from "@/app/lib/types";
+import { MobileNav } from "@/components/layout/MobileNav";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Sparkles, FileText, Download, Share2 } from "lucide-react";
+import { smartSpendingInsights, SmartSpendingInsightsOutput } from "@/ai/flows/smart-spending-insights";
+import { monthlyReportSummary, MonthlyReportSummaryOutput } from "@/ai/flows/monthly-report-summary-flow";
+import { ResponsiveContainer, Tooltip, Cell, Pie, PieChart as RePieChart, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
+import { useRouter } from "next/navigation";
+import { useToast } from "@/hooks/use-toast";
+import { format } from "date-fns";
+
+export default function ReportsPage() {
+  const firestore = useFirestore();
+  const { user, loading: authLoading } = useUser();
   const router = useRouter();
   const { toast } = useToast();
 
-  const isConfigDummy = firebaseConfig.apiKey === 'dummy-api-key';
+  const expensesQuery = useMemo(() => query(collection(firestore, "expenses"), orderBy("date", "desc")), [firestore]);
+  const { data: expenses, loading: expensesLoading } = useCollection<Expense>(expensesQuery as any);
 
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (isConfigDummy) {
-      toast({
-        title: "Configuration Missing",
-        description: "Please connect a real Firebase project in the Studio UI first.",
-        variant: "destructive",
-      });
-      return;
+  const [spendingInsights, setSpendingInsights] = useState<SmartSpendingInsightsOutput | null>(null);
+  const [reportSummary, setReportSummary] = useState<MonthlyReportSummaryOutput | null>(null);
+  const [loadingAi, setLoadingAi] = useState(false);
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push("/login");
     }
+  }, [user, authLoading, router]);
 
-    if (password.length < 6) {
-      toast({
-        title: "Weak Password",
-        description: "Firebase requires at least 6 characters.",
-        variant: "destructive",
-      });
-      return;
-    }
+  const categoryTotals = useMemo(() => {
+    return expenses.reduce((acc, curr) => {
+      acc[curr.category] = (acc[curr.category] || 0) + curr.amount;
+      return acc;
+    }, {} as Record<string, number>);
+  }, [expenses]);
 
-    if (password !== confirmPassword) {
-      toast({
-        title: "Password Mismatch",
-        description: "The confirmation password does not match.",
-        variant: "destructive",
-      });
-      return;
-    }
+  const chartData = useMemo(() => {
+    return Object.entries(categoryTotals).map(([name, value]) => ({ name, value }));
+  }, [categoryTotals]);
 
-    setLoading(true);
+  const memberTotals = useMemo(() => {
+    return expenses.reduce((acc, curr) => {
+      acc[curr.memberName] = (acc[curr.memberName] || 0) + curr.amount;
+      return acc;
+    }, {} as Record<string, number>);
+  }, [expenses]);
+
+  const memberChartData = useMemo(() => {
+    return Object.entries(memberTotals).map(([name, value]) => ({ name, value }));
+  }, [memberTotals]);
+
+  const COLORS = ['#85DAE8', '#395B96', '#546E7A', '#78909C', '#B0BEC5', '#CFD8DC', '#ECEFF1'];
+
+  const handleGenerateAiReports = async () => {
+    if (expenses.length === 0) return;
+    setLoadingAi(true);
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      if (userCredential.user) {
-        toast({
-          title: "Registry Created",
-          description: "Welcome to Kincash!",
-        });
-        router.push('/');
-      }
-    } catch (error: any) {
-      let message = "An error occurred during registration.";
-      if (error.code === 'auth/operation-not-allowed') {
-        message = "Email/Password sign-in is disabled in your Firebase Console.";
-      } else if (error.code === 'auth/email-already-in-use') {
-        message = "This family email is already registered.";
-      }
+      const insightsPromise = smartSpendingInsights({
+        monthlySpending: categoryTotals,
+        spendingHistorySummary: `Total expenses recorded: ${expenses.length}. Total amount: $${expenses.reduce((a, b) => a + b.amount, 0)}`,
+        familyMembers: Array.from(new Set(expenses.map(e => e.memberName)))
+      });
+
+      const summaryPromise = monthlyReportSummary({
+        reportType: 'monthly',
+        periodDescription: format(new Date(), 'MMMM yyyy'),
+        currentPeriodData: chartData.map(d => ({ category: d.name, amount: d.value }))
+      });
+
+      const [insights, summary] = await Promise.all([insightsPromise, summaryPromise]);
+      setSpendingInsights(insights);
+      setReportSummary(summary);
+      
       toast({
-        title: "Registration Failed",
-        description: message,
-        variant: "destructive",
+        title: "AI Analysis Complete",
+        description: "Your family spending insights are ready.",
+      });
+    } catch (e) {
+      console.error(e);
+      toast({
+        title: "AI Failure",
+        description: "Could not generate insights at this time.",
+        variant: "destructive"
       });
     } finally {
-      setLoading(false);
+      setLoadingAi(false);
     }
   };
 
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-background">
-      <div className="mb-8 flex flex-col items-center text-center gap-2">
-        <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center text-accent shadow-xl shadow-primary/20">
-          <Wallet size={32} />
-        </div>
-        <h1 className="text-3xl font-headline font-bold text-foreground mt-4">Kincash</h1>
-        <p className="text-muted-foreground uppercase tracking-widest text-xs font-semibold">Join the Financial Hub</p>
-      </div>
+  const handleExport = () => {
+    toast({
+      title: "PDF Export",
+      description: "Generating financial report document...",
+    });
+  };
 
-      {isConfigDummy && (
-        <Card className="max-w-md w-full mb-6 border-amber-500/20 bg-amber-500/5">
-          <CardContent className="pt-6">
-            <div className="flex gap-3 text-amber-500">
-              <Info className="w-5 h-5 shrink-0 mt-0.5" />
-              <div className="space-y-4">
-                <div>
-                  <p className="font-bold uppercase text-xs mb-1">Step 1: Connect Project</p>
-                  <p className="text-xs">Click the "Connect" button in the Studio interface.</p>
-                </div>
-                <div>
-                  <p className="font-bold uppercase text-xs mb-1">Step 2: Enable Services</p>
-                  <ul className="text-xs list-disc list-inside space-y-1">
-                    <li>Enable **Email/Password** in Firebase Auth.</li>
-                    <li>Create a **Firestore** database in test mode.</li>
-                  </ul>
-                </div>
+  const handleShare = () => {
+    toast({
+      title: "Report Shared",
+      description: "Link copied to family clipboard.",
+    });
+  };
+
+  if (authLoading) return null;
+
+  return (
+    <div className="flex flex-col min-h-screen pb-20 bg-background">
+      <header className="p-6 pt-10 flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-headline font-bold text-foreground">Analytics</h1>
+          <p className="text-muted-foreground">Family spending intelligence</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="ghost" size="icon" onClick={handleExport} className="text-accent">
+            <Download size={20} />
+          </Button>
+          <Button variant="ghost" size="icon" onClick={handleShare} className="text-accent">
+            <Share2 size={20} />
+          </Button>
+        </div>
+      </header>
+
+      <main className="px-6 space-y-6 fade-in">
+        {/* AI Insight Section */}
+        <Card className="glass-card border-none">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="text-accent w-5 h-5 animate-pulse" />
+                <CardTitle className="font-headline text-accent text-lg">AI Financial Assistant</CardTitle>
               </div>
             </div>
+            <CardDescription>Generative spending analysis & savings tips</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {!spendingInsights ? (
+              <Button 
+                onClick={handleGenerateAiReports} 
+                disabled={loadingAi || expenses.length === 0}
+                className="w-full btn-cyan font-bold py-6 rounded-xl"
+              >
+                {loadingAi ? "ANALYZING LEDGER..." : "GENERATE AI INSIGHTS"}
+              </Button>
+            ) : (
+              <div className="space-y-4 animate-in fade-in duration-500">
+                {reportSummary && (
+                  <div className="p-4 rounded-xl bg-accent/10 border border-accent/20">
+                    <h4 className="text-xs font-bold uppercase text-accent mb-2 flex items-center gap-2">
+                      <FileText size={14} /> Monthly Summary
+                    </h4>
+                    <p className="text-sm leading-relaxed text-foreground/90">{reportSummary.summary}</p>
+                  </div>
+                )}
+                <div className="p-4 rounded-xl bg-primary/10 border border-primary/20">
+                  <h4 className="text-xs font-bold uppercase text-accent mb-2">Detailed Analysis</h4>
+                  <p className="text-sm leading-relaxed text-foreground/90">{spendingInsights.spendingAnalysis}</p>
+                </div>
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold uppercase text-accent">Personalized Savings Tips</h4>
+                  {spendingInsights.savingsTips.map((tip, i) => (
+                    <div key={i} className="flex gap-3 items-start text-xs bg-card/50 p-3 rounded-lg border border-white/5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-accent mt-1.5 shrink-0" />
+                      <span>{tip}</span>
+                    </div>
+                  ))}
+                </div>
+                <Button variant="outline" size="sm" onClick={() => { setSpendingInsights(null); setReportSummary(null); }} className="w-full text-muted-foreground">
+                  Reset Analysis
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
-      )}
 
-      {!isConfigDummy && (
-        <div className="max-w-md w-full mb-6 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center gap-3 text-emerald-500">
-          <CheckCircle2 className="w-4 h-4" />
-          <p className="text-[10px] font-bold uppercase tracking-widest">Firebase Gateway Active</p>
-        </div>
-      )}
+        {/* Charts Section */}
+        <Tabs defaultValue="categories" className="w-full">
+          <TabsList className="w-full grid grid-cols-2 bg-card/60 border border-white/5 p-1 rounded-xl">
+            <TabsTrigger value="categories" className="rounded-lg data-[state=active]:bg-primary/20">Categories</TabsTrigger>
+            <TabsTrigger value="members" className="rounded-lg data-[state=active]:bg-primary/20">Members</TabsTrigger>
+          </TabsList>
+          
+          <TabsContent value="categories" className="mt-4 space-y-4">
+            <Card className="bg-card/40 border-none rounded-2xl overflow-hidden">
+              <CardHeader className="pb-0">
+                <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Expense Distribution</CardTitle>
+              </CardHeader>
+              <CardContent className="h-[300px]">
+                {chartData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RePieChart>
+                      <Pie
+                        data={chartData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {chartData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#1E232E', border: 'none', borderRadius: '12px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)' }}
+                        itemStyle={{ color: '#85DAE8' }}
+                      />
+                    </RePieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-muted-foreground italic text-sm">No transaction data available</div>
+                )}
+              </CardContent>
+            </Card>
 
-      <Card className="w-full max-w-md glass-card border-none">
-        <CardHeader>
-          <CardTitle className="font-headline">Create Registry</CardTitle>
-          <CardDescription>Setup your shared family account</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleRegister} className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase text-muted-foreground">Shared Family Email</label>
-              <Input
-                type="email"
-                placeholder="family@kincash.app"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="bg-card/50 h-12"
-              />
+            <div className="space-y-3">
+              {chartData.sort((a, b) => b.value - a.value).map((item, idx) => (
+                <div key={idx} className="bg-card/30 p-4 rounded-xl border border-white/5 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
+                    <span className="text-sm font-medium">{item.name}</span>
+                  </div>
+                  <span className="font-headline font-bold text-accent">${item.value.toLocaleString()}</span>
+                </div>
+              ))}
             </div>
-            <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase text-muted-foreground">PIN / Password (min 6 chars)</label>
-              <Input
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="bg-card/50 h-12"
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase text-muted-foreground">Confirm PIN</label>
-              <Input
-                type="password"
-                placeholder="••••••••"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                className="bg-card/50 h-12"
-              />
-            </div>
-            <Button type="submit" className="w-full btn-cyan py-6 font-bold" disabled={loading || isConfigDummy}>
-              {loading ? "INITIALIZING..." : "CREATE FAMILY REGISTRY"}
-            </Button>
-          </form>
-        </CardContent>
-        <CardFooter className="flex flex-col gap-2">
-          <p className="text-sm text-muted-foreground">
-            Already have an account? <Link href="/login" className="text-accent hover:underline">Sign in</Link>
-          </p>
-        </CardFooter>
-      </Card>
+          </TabsContent>
+          
+          <TabsContent value="members" className="mt-4">
+             <Card className="bg-card/40 border-none rounded-2xl">
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Spending per Member</CardTitle>
+              </CardHeader>
+              <CardContent className="h-[300px]">
+                {memberChartData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={memberChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#2D3748" vertical={false} />
+                      <XAxis dataKey="name" stroke="#A0AEC0" fontSize={10} tickLine={false} axisLine={false} />
+                      <YAxis stroke="#A0AEC0" fontSize={10} tickLine={false} axisLine={false} />
+                      <Tooltip 
+                         cursor={{fill: 'rgba(133, 218, 232, 0.1)'}}
+                         contentStyle={{ backgroundColor: '#1E232E', border: 'none', borderRadius: '12px' }}
+                      />
+                      <Bar dataKey="value" fill="#85DAE8" radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-muted-foreground italic text-sm">No member data available</div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </main>
+
+      <MobileNav />
     </div>
   );
 }
